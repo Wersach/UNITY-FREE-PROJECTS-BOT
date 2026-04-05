@@ -22,7 +22,32 @@ def _get(url, params=None):
         return None
 
 
-def _format_repo(item) -> dict:
+def _get_readme(owner, repo):
+    data = _get(f"https://api.github.com/repos/{owner}/{repo}/readme")
+    if not data:
+        return ""
+    try:
+        return base64.b64decode(data.get("content", "")).decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+
+def _find_screenshot(readme, owner, repo):
+    skip = ["badge", "shield", "icon", "logo", "travis", "codecov", "workflow", "license"]
+    for m in re.finditer(r"!\[[^\]]*\]\(([^)\s]+\.(?:png|jpg|jpeg|gif|webp))[^)]*\)", readme, re.IGNORECASE):
+        path = m.group(1).strip()
+        if not path.startswith("http"):
+            path = f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/{path.lstrip('./')}"
+        if not any(s in path.lower() for s in skip):
+            return path
+    for m in re.finditer(r"https://(?:user-images\.githubusercontent\.com|raw\.githubusercontent\.com)/\S+", readme, re.IGNORECASE):
+        url = m.group(0).rstrip(".,)\"'")
+        if not any(s in url.lower() for s in skip):
+            return url
+    return None
+
+
+def _format_repo(item, readme="", screenshot=None) -> dict:
     return {
         "name": item["full_name"],
         "url": item["html_url"],
@@ -31,17 +56,8 @@ def _format_repo(item) -> dict:
         "language": item.get("language") or "C#",
         "updated": item.get("updated_at", "")[:10],
         "license": (item.get("license") or {}).get("spdx_id", "—"),
+        "screenshot": screenshot,
     }
-
-
-def format_repo_text(repo: dict, index: int = None) -> str:
-    prefix = f"{index}. " if index else ""
-    return (
-        f"{prefix}<b>{repo['name']}</b>\n"
-        f"⭐ {repo['stars']} | 🗓 {repo['updated']} | 📄 {repo['license']}\n"
-        f"<i>{repo['description'][:150]}</i>\n"
-        f"🔗 {repo['url']}"
-    )
 
 
 def random_repo() -> dict | None:
@@ -55,7 +71,11 @@ def random_repo() -> dict | None:
         return None
     items = data["items"]
     random.shuffle(items)
-    return _format_repo(items[0])
+    item = items[0]
+    owner, repo = item["owner"]["login"], item["name"]
+    readme = _get_readme(owner, repo)
+    screenshot = _find_screenshot(readme, owner, repo)
+    return _format_repo(item, readme, screenshot)
 
 
 def search_repos(query: str, stars_min: int = 0, stars_max: int = 10000,
@@ -68,11 +88,16 @@ def search_repos(query: str, stars_min: int = 0, stars_max: int = 10000,
         q += f" pushed:>{updated_after}"
     if license_filter:
         q += f" license:{license_filter}"
-
     data = _get(
         "https://api.github.com/search/repositories",
         params={"q": q, "sort": "stars", "order": "desc", "per_page": per_page},
     )
     if not data or not data.get("items"):
         return []
-    return [_format_repo(item) for item in data["items"]]
+    results = []
+    for item in data["items"]:
+        owner, repo = item["owner"]["login"], item["name"]
+        readme = _get_readme(owner, repo)
+        screenshot = _find_screenshot(readme, owner, repo)
+        results.append(_format_repo(item, readme, screenshot))
+    return results

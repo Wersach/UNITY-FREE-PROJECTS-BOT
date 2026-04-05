@@ -12,7 +12,7 @@ from telegram.constants import ParseMode
 
 import config
 import database as db
-from github_search import random_repo, search_repos, format_repo_text
+from github_search import random_repo, search_repos
 from ai_search import translate_to_github_query
 from payments import generate_payment_url, verify_payment
 
@@ -26,6 +26,55 @@ logger = logging.getLogger(__name__)
 WAITING_SEARCH = set()
 WAITING_AI = set()
 WAITING_NOTIF = set()
+
+
+# ============================================================
+# ОТПРАВКА КАРТОЧКИ РЕПОЗИТОРИЯ
+# ============================================================
+
+WARNING_TEXT = (
+    "\n\n<i>⚠️ Бот может ошибаться при определении типа проекта. "
+    "Всегда проверяйте репозиторий перед использованием.</i>"
+)
+
+
+async def send_repo_card(bot, chat_id: int, repo: dict, show_save: bool = True):
+    text = (
+        f"🎮 <b>{repo['name']}</b>\n\n"
+        f"<blockquote>{repo['description'][:200]}</blockquote>\n\n"
+        f"⭐ {repo['stars']}  |  🗓 {repo['updated']}  |  📄 {repo['license']}"
+        + WARNING_TEXT
+    )
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⭐ В избранное", callback_data=f"save:{repo['url']}"),
+         InlineKeyboardButton("🔗 GitHub", url=repo['url'])],
+    ] if show_save else [
+        [InlineKeyboardButton("🔗 GitHub", url=repo['url'])],
+    ])
+
+    screenshot = repo.get("screenshot")
+    if screenshot:
+        try:
+            import requests as req, io
+            r = req.get(screenshot, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+            r.raise_for_status()
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=io.BytesIO(r.content),
+                caption=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+            )
+            return
+        except Exception:
+            pass
+    await bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
+    )
 
 
 # ============================================================
@@ -131,16 +180,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=subscribe_keyboard(),
                 )
                 return
+        await query.edit_message_text("🎲 Ищу случайный репозиторий...")
         repo = random_repo()
         if not repo:
             await query.edit_message_text("😔 Не удалось найти репозиторий. Попробуйте ещё раз.")
             return
-        text = format_repo_text(repo)
-        await query.edit_message_text(
-            text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=repo_keyboard(repo["url"]),
-            disable_web_page_preview=True,
+        await send_repo_card(context.bot, user_id, repo, show_save=is_sub)
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="Главное меню 👇",
+            reply_markup=main_menu(is_sub),
         )
 
     # ---- ПОИСК (только для подписчиков) ----
@@ -378,15 +427,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        text_out = f"🔍 Результаты по запросу <b>{query}</b>:\n\n"
-        for i, repo in enumerate(results, 1):
-            text_out += format_repo_text(repo, i) + "\n\n"
-
+        await update.message.reply_text(f"🔍 Результаты по запросу <b>{query}</b>:", parse_mode=ParseMode.HTML)
+        for repo in results:
+            await send_repo_card(context.bot, update.effective_user.id, repo, show_save=True)
+            await asyncio.sleep(0.5)
         await update.message.reply_text(
-            text_out,
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ В меню", callback_data="back")]]),
+            "Главное меню 👇",
+            reply_markup=main_menu(True),
         )
 
     # ---- AI-ПОИСК ----
@@ -411,15 +458,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        text_out = f"🤖 Нашёл по запросу <b>{github_query}</b>:\n\n"
-        for i, repo in enumerate(results, 1):
-            text_out += format_repo_text(repo, i) + "\n\n"
-
+        await update.message.reply_text(f"🤖 Нашёл по запросу <b>{github_query}</b>:", parse_mode=ParseMode.HTML)
+        for repo in results:
+            await send_repo_card(context.bot, update.effective_user.id, repo, show_save=True)
+            await asyncio.sleep(0.5)
         await update.message.reply_text(
-            text_out,
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ В меню", callback_data="back")]]),
+            "Главное меню 👇",
+            reply_markup=main_menu(True),
         )
 
     # ---- УВЕДОМЛЕНИЕ ----
