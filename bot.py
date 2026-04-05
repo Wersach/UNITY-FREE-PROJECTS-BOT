@@ -14,7 +14,7 @@ import config
 import database as db
 from github_search import random_repo, search_repos
 from ai_search import translate_to_github_query
-from payments import generate_payment_url, verify_payment
+from payments import generate_payment_url
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -22,37 +22,38 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# user_id -> режим ожидания ввода
 WAITING_SEARCH = set()
 WAITING_AI = set()
 WAITING_NOTIF = set()
+WAITING_PROMO = set()
 
 
 # ============================================================
-# ОТПРАВКА КАРТОЧКИ РЕПОЗИТОРИЯ
+# КАРТОЧКА РЕПОЗИТОРИЯ
 # ============================================================
 
-WARNING_TEXT = (
-    "\n\n<i>⚠️ Бот может ошибаться при определении типа проекта. "
-    "Всегда проверяйте репозиторий перед использованием.</i>"
-)
+WARNING_TEXT = "\n\n<i>⚠️ Бот может ошибаться. Всегда проверяйте репозиторий перед использованием.</i>"
 
 
 async def send_repo_card(bot, chat_id: int, repo: dict, show_save: bool = True):
     text = (
         f"🎮 <b>{repo['name']}</b>\n\n"
-        f"<blockquote>{repo['description'][:200]}</blockquote>\n\n"
+        f"<blockquote>{repo['description'][:300]}</blockquote>\n\n"
         f"⭐ {repo['stars']}  |  🗓 {repo['updated']}  |  📄 {repo['license']}"
         + WARNING_TEXT
     )
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⭐ В избранное", callback_data=f"save:{repo['url']}"),
-         InlineKeyboardButton("🔗 GitHub", url=repo['url'])],
-    ] if show_save else [
-        [InlineKeyboardButton("🔗 GitHub", url=repo['url'])],
-    ])
+    buttons = []
+    if show_save:
+        buttons.append([
+            InlineKeyboardButton("⭐ В избранное", callback_data=f"save:{repo['url']}"),
+            InlineKeyboardButton("🔗 GitHub", url=repo['url']),
+        ])
+    else:
+        buttons.append([InlineKeyboardButton("🔗 GitHub", url=repo['url'])])
 
+    keyboard = InlineKeyboardMarkup(buttons)
     screenshot = repo.get("screenshot")
+
     if screenshot:
         try:
             import requests as req, io
@@ -68,6 +69,7 @@ async def send_repo_card(bot, chat_id: int, repo: dict, show_save: bool = True):
             return
         except Exception:
             pass
+
     await bot.send_message(
         chat_id=chat_id,
         text=text,
@@ -89,14 +91,17 @@ def main_menu(is_sub: bool) -> InlineKeyboardMarkup:
              InlineKeyboardButton("🤖 AI-поиск", callback_data="ai_search")],
             [InlineKeyboardButton("⭐ Избранное", callback_data="favorites"),
              InlineKeyboardButton("🔔 Уведомления", callback_data="notifications")],
-            [InlineKeyboardButton("👤 Профиль", callback_data="profile")],
+            [InlineKeyboardButton("👤 Профиль", callback_data="profile"),
+             InlineKeyboardButton("📢 Канал", url="https://t.me/unity_free_projects")],
         ])
     else:
         return InlineKeyboardMarkup([
             [InlineKeyboardButton("🎲 Случайный репо", callback_data="random")],
             [InlineKeyboardButton("💎 Получить подписку", callback_data="subscribe")],
-            [InlineKeyboardButton("👤 Профиль", callback_data="profile"),
+            [InlineKeyboardButton("🎟 Промокод", callback_data="promo"),
              InlineKeyboardButton("👥 Реферал", callback_data="referral")],
+            [InlineKeyboardButton("👤 Профиль", callback_data="profile"),
+             InlineKeyboardButton("📢 Канал", url="https://t.me/unity_free_projects")],
         ])
 
 
@@ -104,15 +109,8 @@ def subscribe_keyboard() -> InlineKeyboardMarkup:
     buttons = []
     for key, plan in config.PLANS.items():
         buttons.append([InlineKeyboardButton(plan["label"], callback_data=f"buy:{key}")])
-    buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="back")])
-    return InlineKeyboardMarkup(buttons)
-
-
-def repo_keyboard(repo_url: str, show_save: bool = True) -> InlineKeyboardMarkup:
-    buttons = []
-    if show_save:
-        buttons.append([InlineKeyboardButton("⭐ В избранное", callback_data=f"save:{repo_url}")])
-    buttons.append([InlineKeyboardButton("◀️ В меню", callback_data="back")])
+    buttons.append([InlineKeyboardButton("🎟 Промокод", callback_data="promo"),
+                    InlineKeyboardButton("◀️ Назад", callback_data="back")])
     return InlineKeyboardMarkup(buttons)
 
 
@@ -123,7 +121,6 @@ def repo_keyboard(repo_url: str, show_save: bool = True) -> InlineKeyboardMarkup
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     args = context.args
-
     referred_by = None
     if args and args[0].startswith("ref"):
         try:
@@ -136,14 +133,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     existing = db.get_user(user.id)
     db.create_user(user.id, user.username or "", referred_by)
 
-    # Начисляем бонус рефереру
     if referred_by and not existing:
         db.add_subscription(referred_by, config.REFERRAL_BONUS_DAYS)
         try:
             await context.bot.send_message(
                 chat_id=referred_by,
-                text=f"🎉 По вашей реферальной ссылке зарегистрировался новый пользователь!\n"
-                     f"+{config.REFERRAL_BONUS_DAYS} дней подписки добавлено.",
+                text=f"🎉 По вашей ссылке зарегистрировался новый пользователь!\n"
+                     f"+{config.REFERRAL_BONUS_DAYS} дней подписки.",
             )
         except Exception:
             pass
@@ -152,14 +148,14 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"👋 Привет, <b>{user.first_name}</b>!\n\n"
         f"Я помогаю находить Unity-проекты на GitHub.\n\n"
-        f"{'✅ У вас активна подписка' if is_sub else '🆓 Бесплатный план: 5 случайных репо в день'}",
+        f"{'✅ У вас активна подписка' if is_sub else f'🆓 Бесплатный план: {config.FREE_DAILY_LIMIT} случайных репо в день'}",
         parse_mode=ParseMode.HTML,
         reply_markup=main_menu(is_sub),
     )
 
 
 # ============================================================
-# CALLBACK ОБРАБОТЧИК
+# CALLBACK
 # ============================================================
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -169,7 +165,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     is_sub = db.is_subscribed(user_id)
 
-    # ---- СЛУЧАЙНЫЙ РЕПО ----
     if data == "random":
         if not is_sub:
             if not db.check_daily_limit(user_id, config.FREE_DAILY_LIMIT):
@@ -181,10 +176,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
         await query.edit_message_text("🎲 Ищу случайный репозиторий...")
-        repo = random_repo()
+        # Ищем репо которого пользователь ещё не видел
+        for _ in range(5):
+            repo = random_repo()
+            if repo and not db.is_repo_seen(user_id, repo["url"]):
+                break
         if not repo:
             await query.edit_message_text("😔 Не удалось найти репозиторий. Попробуйте ещё раз.")
             return
+        db.mark_repo_seen(user_id, repo["url"])
         await send_repo_card(context.bot, user_id, repo, show_save=is_sub)
         await context.bot.send_message(
             chat_id=user_id,
@@ -192,46 +192,41 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_menu(is_sub),
         )
 
-    # ---- ПОИСК (только для подписчиков) ----
     elif data == "search":
         if not is_sub:
             await query.edit_message_text(
-                "🔍 Поиск доступен только по подписке.\n\nПолучите доступ ко всем функциям 👇",
+                "🔍 Поиск доступен только по подписке.\n\nПолучите доступ 👇",
                 reply_markup=subscribe_keyboard(),
             )
             return
         WAITING_SEARCH.add(user_id)
         await query.edit_message_text(
             "🔍 Введите поисковый запрос:\n\n"
-            "<i>Примеры: roguelike, 2D platformer, tower defense</i>\n\n"
-            "Можно добавить фильтры после запятой:\n"
+            "<i>Примеры: roguelike, 2D platformer, horror</i>\n\n"
+            "Фильтры через запятую:\n"
             "<i>roguelike, stars:50-500, updated:2023, license:MIT</i>",
             parse_mode=ParseMode.HTML,
         )
 
-    # ---- AI-ПОИСК (только для подписчиков) ----
     elif data == "ai_search":
         if not is_sub:
             await query.edit_message_text(
-                "🤖 AI-поиск доступен только по подписке.\n\nПолучите доступ ко всем функциям 👇",
+                "🤖 AI-поиск доступен только по подписке.",
                 reply_markup=subscribe_keyboard(),
             )
             return
         WAITING_AI.add(user_id)
         await query.edit_message_text(
-            "🤖 Опишите что хотите найти на любом языке:\n\n"
-            "<i>Примеры:\n"
-            "— хочу найти платформер с процедурной генерацией\n"
+            "🤖 Опишите что хотите найти:\n\n"
+            "<i>— хочу платформер с процедурной генерацией\n"
             "— мобильная RPG с открытым кодом\n"
             "— шутер от первого лица для новичков</i>",
             parse_mode=ParseMode.HTML,
         )
 
-    # ---- ПОДПИСКА ----
     elif data == "subscribe":
         await query.edit_message_text(
             "💎 <b>Подписка Unity Search</b>\n\n"
-            "Что входит:\n"
             "✅ Безлимитный поиск\n"
             "✅ AI-поиск на естественном языке\n"
             "✅ Фильтры по звёздам, дате, лицензии\n"
@@ -242,7 +237,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=subscribe_keyboard(),
         )
 
-    # ---- КУПИТЬ ПЛАН ----
     elif data.startswith("buy:"):
         plan_key = data.split(":")[1]
         plan = config.PLANS.get(plan_key)
@@ -260,7 +254,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             disable_web_page_preview=True,
         )
 
-    # ---- ПРОФИЛЬ ----
+    elif data == "promo":
+        WAITING_PROMO.add(user_id)
+        await query.edit_message_text(
+            "🎟 Введите промокод:",
+        )
+
     elif data == "profile":
         user = db.get_user(user_id)
         sub_until = user["sub_until"]
@@ -269,7 +268,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             sub_text = "❌ Нет подписки"
         ref_count = db.get_referral_count(user_id)
-        ref_link = f"https://t.me/{(await context.bot.get_me()).username}?start=ref{user_id}"
+        me = await context.bot.get_me()
+        ref_link = f"https://t.me/{me.username}?start=ref{user_id}"
         await query.edit_message_text(
             f"👤 <b>Профиль</b>\n\n"
             f"🔑 ID: <code>{user_id}</code>\n"
@@ -277,18 +277,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👥 Рефералов: {ref_count} (+{ref_count * config.REFERRAL_BONUS_DAYS} дней)\n\n"
             f"Реферальная ссылка:\n<code>{ref_link}</code>",
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="back")]]),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("💎 Купить подписку", callback_data="subscribe")],
+                [InlineKeyboardButton("◀️ Назад", callback_data="back")],
+            ]),
         )
 
-    # ---- РЕФЕРАЛ ----
     elif data == "referral":
         ref_count = db.get_referral_count(user_id)
         me = await context.bot.get_me()
         ref_link = f"https://t.me/{me.username}?start=ref{user_id}"
         await query.edit_message_text(
             f"👥 <b>Реферальная программа</b>\n\n"
-            f"За каждого приглашённого друга вы получаете "
-            f"<b>{config.REFERRAL_BONUS_DAYS} дня</b> подписки бесплатно.\n\n"
+            f"За каждого приглашённого — <b>{config.REFERRAL_BONUS_DAYS} дня</b> подписки.\n\n"
             f"Ваших рефералов: <b>{ref_count}</b>\n"
             f"Заработано дней: <b>{ref_count * config.REFERRAL_BONUS_DAYS}</b>\n\n"
             f"Ваша ссылка:\n<code>{ref_link}</code>",
@@ -296,7 +297,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="back")]]),
         )
 
-    # ---- ИЗБРАННОЕ ----
     elif data == "favorites":
         if not is_sub:
             await query.edit_message_text(
@@ -307,39 +307,30 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         favs = db.get_favorites(user_id)
         if not favs:
             await query.edit_message_text(
-                "⭐ Избранное пусто.\n\nДобавляйте репозитории кнопкой ⭐ В избранное.",
+                "⭐ Избранное пусто.\n\nДобавляйте репозитории кнопкой ⭐",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="back")]]),
             )
             return
-        text = "⭐ <b>Избранное:</b>\n\n"
-        buttons = []
-        for i, f in enumerate(favs[:10], 1):
-            text += f"{i}. <a href='{f['repo_url']}'>{f['repo_name']}</a> ⭐{f['stars']}\n"
-            buttons.append([InlineKeyboardButton(f"🗑 {f['repo_name']}", callback_data=f"unfav:{f['repo_url']}")])
-        buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="back")])
-        await query.edit_message_text(
-            text, parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(buttons),
-            disable_web_page_preview=True,
-        )
+        await show_favorites_page(query, user_id, favs, page=0)
 
-    # ---- СОХРАНИТЬ В ИЗБРАННОЕ ----
+    elif data.startswith("fav_page:"):
+        page = int(data.split(":")[1])
+        favs = db.get_favorites(user_id)
+        await show_favorites_page(query, user_id, favs, page=page)
+
     elif data.startswith("save:"):
         if not is_sub:
             await query.answer("⭐ Избранное доступно только по подписке.", show_alert=True)
             return
         repo_url = data[5:]
-        # Получаем имя из URL
         repo_name = "/".join(repo_url.split("/")[-2:])
         db.add_favorite(user_id, repo_url, repo_name, 0)
         await query.answer("✅ Добавлено в избранное!")
 
-    # ---- УДАЛИТЬ ИЗ ИЗБРАННОГО ----
     elif data.startswith("unfav:"):
         repo_url = data[6:]
         db.remove_favorite(user_id, repo_url)
-        await query.answer("🗑 Удалено из избранного")
-        # Обновляем список
+        await query.answer("🗑 Удалено")
         favs = db.get_favorites(user_id)
         if not favs:
             await query.edit_message_text(
@@ -347,19 +338,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="back")]]),
             )
         else:
-            text = "⭐ <b>Избранное:</b>\n\n"
-            buttons = []
-            for i, f in enumerate(favs[:10], 1):
-                text += f"{i}. <a href='{f['repo_url']}'>{f['repo_name']}</a> ⭐{f['stars']}\n"
-                buttons.append([InlineKeyboardButton(f"🗑 {f['repo_name']}", callback_data=f"unfav:{f['repo_url']}")])
-            buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="back")])
-            await query.edit_message_text(
-                text, parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup(buttons),
-                disable_web_page_preview=True,
-            )
+            await show_favorites_page(query, user_id, favs, page=0)
 
-    # ---- УВЕДОМЛЕНИЯ ----
     elif data == "notifications":
         if not is_sub:
             await query.edit_message_text(
@@ -370,22 +350,47 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         WAITING_NOTIF.add(user_id)
         await query.edit_message_text(
             "🔔 Введите тему для уведомлений:\n\n"
-            "<i>Примеры: roguelike, horror game, 2D platformer</i>\n\n"
-            "Бот будет присылать новые репозитории по этой теме раз в день.",
+            "<i>Примеры: roguelike, horror, 2D platformer</i>\n\n"
+            "Бот будет присылать новые репозитории раз в день.",
             parse_mode=ParseMode.HTML,
         )
 
-    # ---- НАЗАД ----
     elif data == "back":
-        is_sub = db.is_subscribed(user_id)
         await query.edit_message_text(
             "Главное меню 👇",
             reply_markup=main_menu(is_sub),
         )
 
 
+async def show_favorites_page(query, user_id: int, favs: list, page: int):
+    total = len(favs)
+    fav = favs[page]
+    text = (
+        f"⭐ <b>Избранное</b>  {page + 1}/{total}\n\n"
+        f"<b>{fav['repo_name']}</b>\n"
+        f"⭐ {fav['stars']}\n"
+        f"🔗 {fav['repo_url']}"
+    )
+    buttons = []
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("◀️", callback_data=f"fav_page:{page - 1}"))
+    nav.append(InlineKeyboardButton(f"{page + 1}/{total}", callback_data="noop"))
+    if page < total - 1:
+        nav.append(InlineKeyboardButton("▶️", callback_data=f"fav_page:{page + 1}"))
+    buttons.append(nav)
+    buttons.append([InlineKeyboardButton("🗑 Удалить", callback_data=f"unfav:{fav['repo_url']}")])
+    buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="back")])
+    await query.edit_message_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons),
+        disable_web_page_preview=True,
+    )
+
+
 # ============================================================
-# ОБРАБОТЧИК ТЕКСТА
+# ТЕКСТ
 # ============================================================
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -393,18 +398,40 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     is_sub = db.is_subscribed(user_id)
 
-    # ---- ПОИСК ----
-    if user_id in WAITING_SEARCH:
+    if user_id in WAITING_PROMO:
+        WAITING_PROMO.discard(user_id)
+        result = db.use_promo(user_id, text)
+        if not result:
+            await update.message.reply_text(
+                "❌ Промокод не найден.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ В меню", callback_data="back")]]),
+            )
+        elif result.get("error") == "expired":
+            await update.message.reply_text(
+                "❌ Промокод больше не активен.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ В меню", callback_data="back")]]),
+            )
+        elif result.get("error") == "already_used":
+            await update.message.reply_text(
+                "❌ Вы уже использовали этот промокод.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ В меню", callback_data="back")]]),
+            )
+        else:
+            until = db.add_subscription(user_id, result["days"])
+            await update.message.reply_text(
+                f"✅ Промокод активирован! +{result['days']} дней подписки.\n"
+                f"Подписка до: {until.strftime('%d.%m.%Y')}",
+                reply_markup=main_menu(True),
+            )
+
+    elif user_id in WAITING_SEARCH:
         WAITING_SEARCH.discard(user_id)
         await update.message.reply_text("🔍 Ищу...")
-
-        # Парсим фильтры
         parts = [p.strip() for p in text.split(",")]
-        query = parts[0]
+        query_str = parts[0]
         stars_min, stars_max = 0, 10000
         updated_after = None
         license_filter = None
-
         for part in parts[1:]:
             if part.startswith("stars:"):
                 try:
@@ -417,57 +444,42 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 updated_after = part[8:] + "-01-01"
             elif part.startswith("license:"):
                 license_filter = part[8:]
-
-        results = search_repos(query, stars_min, stars_max, updated_after, license_filter)
+        results = search_repos(query_str, stars_min, stars_max, updated_after, license_filter)
         if not results:
             await update.message.reply_text(
-                "😔 К сожалению, по вашему запросу репозитории не найдены.\n"
-                "Попробуйте другие ключевые слова.",
+                "😔 По вашему запросу репозитории не найдены.\nПопробуйте другие ключевые слова.",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ В меню", callback_data="back")]]),
             )
             return
-
-        await update.message.reply_text(f"🔍 Результаты по запросу <b>{query}</b>:", parse_mode=ParseMode.HTML)
+        await update.message.reply_text(f"🔍 Результаты по запросу <b>{query_str}</b>:", parse_mode=ParseMode.HTML)
         for repo in results:
-            await send_repo_card(context.bot, update.effective_user.id, repo, show_save=True)
+            await send_repo_card(context.bot, user_id, repo, show_save=True)
             await asyncio.sleep(0.5)
-        await update.message.reply_text(
-            "Главное меню 👇",
-            reply_markup=main_menu(True),
-        )
+        await update.message.reply_text("Главное меню 👇", reply_markup=main_menu(True))
 
-    # ---- AI-ПОИСК ----
     elif user_id in WAITING_AI:
         WAITING_AI.discard(user_id)
         await update.message.reply_text("🤖 Обрабатываю запрос...")
-
         github_query = translate_to_github_query(text)
         if not github_query:
             await update.message.reply_text(
-                "😔 Не удалось понять запрос. Попробуйте описать подробнее что хотите найти.",
+                "😔 Не удалось понять запрос. Попробуйте описать подробнее.",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ В меню", callback_data="back")]]),
             )
             return
-
         results = search_repos(github_query)
         if not results:
             await update.message.reply_text(
-                "😔 К сожалению, по вашему запросу репозитории не найдены.\n"
-                "Попробуйте описать по-другому.",
+                "😔 По вашему запросу репозитории не найдены.",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ В меню", callback_data="back")]]),
             )
             return
-
         await update.message.reply_text(f"🤖 Нашёл по запросу <b>{github_query}</b>:", parse_mode=ParseMode.HTML)
         for repo in results:
-            await send_repo_card(context.bot, update.effective_user.id, repo, show_save=True)
+            await send_repo_card(context.bot, user_id, repo, show_save=True)
             await asyncio.sleep(0.5)
-        await update.message.reply_text(
-            "Главное меню 👇",
-            reply_markup=main_menu(True),
-        )
+        await update.message.reply_text("Главное меню 👇", reply_markup=main_menu(True))
 
-    # ---- УВЕДОМЛЕНИЕ ----
     elif user_id in WAITING_NOTIF:
         WAITING_NOTIF.discard(user_id)
         db.add_notification(user_id, text)
@@ -476,16 +488,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ В меню", callback_data="back")]]),
         )
-
     else:
-        await update.message.reply_text(
-            "Используйте меню 👇",
-            reply_markup=main_menu(is_sub),
-        )
+        await update.message.reply_text("Используйте меню 👇", reply_markup=main_menu(is_sub))
 
 
 # ============================================================
-# УВЕДОМЛЕНИЯ ПО РАСПИСАНИЮ
+# УВЕДОМЛЕНИЯ
 # ============================================================
 
 async def send_notifications(context: ContextTypes.DEFAULT_TYPE):
@@ -496,19 +504,18 @@ async def send_notifications(context: ContextTypes.DEFAULT_TYPE):
         results = search_repos(notif["query"], per_page=3)
         if not results:
             continue
-        text = f"🔔 Новые репозитории по теме <b>{notif['query']}</b>:\n\n"
-        for i, repo in enumerate(results, 1):
-            text += format_repo_text(repo, i) + "\n\n"
-        try:
-            await context.bot.send_message(
-                chat_id=notif["user_id"],
-                text=text,
-                parse_mode=ParseMode.HTML,
-                disable_web_page_preview=True,
-            )
-            db.update_notification_sent(notif["id"])
-        except Exception as e:
-            logger.error(f"[NOTIF] Ошибка отправки: {e}")
+        await context.bot.send_message(
+            chat_id=notif["user_id"],
+            text=f"🔔 Новые репозитории по теме <b>{notif['query']}</b>:",
+            parse_mode=ParseMode.HTML,
+        )
+        for repo in results:
+            try:
+                await send_repo_card(context.bot, notif["user_id"], repo, show_save=True)
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.error(f"[NOTIF] Ошибка: {e}")
+        db.update_notification_sent(notif["id"])
 
 
 # ============================================================
@@ -521,9 +528,9 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stats = db.get_stats()
     await update.message.reply_text(
         f"📊 <b>Статистика</b>\n\n"
-        f"👥 Всего пользователей: {stats['total']}\n"
+        f"👥 Пользователей: {stats['total']}\n"
         f"💎 Активных подписок: {stats['subscribed']}\n"
-        f"💳 Всего оплат: {stats['paid']}\n"
+        f"💳 Оплат: {stats['paid']}\n"
         f"💰 Выручка: {stats['revenue']}₽",
         parse_mode=ParseMode.HTML,
     )
@@ -545,6 +552,29 @@ async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Ошибка: {e}")
 
 
+async def cmd_promo_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != config.ADMIN_ID:
+        return
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text("Использование: /createpromo [код] [дней] [макс_использований=1]")
+        return
+    try:
+        code = args[0].upper()
+        days = int(args[1])
+        max_uses = int(args[2]) if len(args) > 2 else 1
+        db.create_promo(code, days, max_uses, update.effective_user.id)
+        await update.message.reply_text(f"✅ Промокод создан: <code>{code}</code> — {days} дней, до {max_uses} использований", parse_mode=ParseMode.HTML)
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка: {e}")
+
+
+async def cmd_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != config.ADMIN_ID:
+        return
+    await update.message.reply_text(f"Ваш ID: <code>{update.effective_user.id}</code>", parse_mode=ParseMode.HTML)
+
+
 # ============================================================
 # ТОЧКА ВХОДА
 # ============================================================
@@ -556,10 +586,11 @@ def main():
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CommandHandler("give", cmd_give))
+    app.add_handler(CommandHandler("createpromo", cmd_promo_create))
+    app.add_handler(CommandHandler("me", cmd_me))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    # Уведомления раз в день
     app.job_queue.run_repeating(send_notifications, interval=86400, first=60)
 
     logger.info("🤖 Unity Search Bot запущен")

@@ -54,6 +54,29 @@ def init_db():
                     last_sent TIMESTAMP DEFAULT NOW()
                 )
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS seen_repos (
+                    user_id BIGINT,
+                    repo_url TEXT,
+                    PRIMARY KEY (user_id, repo_url)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS promo_codes (
+                    code TEXT PRIMARY KEY,
+                    days INTEGER,
+                    max_uses INTEGER DEFAULT 1,
+                    used_count INTEGER DEFAULT 0,
+                    created_by BIGINT
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS promo_uses (
+                    user_id BIGINT,
+                    code TEXT,
+                    PRIMARY KEY (user_id, code)
+                )
+            """)
         conn.commit()
     logger.info("БД инициализирована")
 
@@ -271,3 +294,55 @@ def get_stats() -> dict:
             cur.execute("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'paid'")
             revenue = cur.fetchone()[0]
     return {"total": total, "subscribed": subscribed, "paid": paid, "revenue": revenue}
+
+
+# ==================== SEEN REPOS (без повторов) ====================
+
+def is_repo_seen(user_id: int, repo_url: str) -> bool:
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM seen_repos WHERE user_id = %s AND repo_url = %s", (user_id, repo_url))
+            return cur.fetchone() is not None
+
+
+def mark_repo_seen(user_id: int, repo_url: str):
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO seen_repos (user_id, repo_url) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                (user_id, repo_url),
+            )
+        conn.commit()
+
+
+# ==================== ПРОМОКОДЫ ====================
+
+def create_promo(code: str, days: int, max_uses: int, created_by: int):
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO promo_codes (code, days, max_uses, created_by)
+                   VALUES (%s, %s, %s, %s) ON CONFLICT (code) DO NOTHING""",
+                (code.upper(), days, max_uses, created_by),
+            )
+        conn.commit()
+
+
+def use_promo(user_id: int, code: str) -> dict | None:
+    code = code.upper()
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM promo_codes WHERE code = %s", (code,))
+            promo = cur.fetchone()
+            if not promo:
+                return None
+            promo = dict(promo)
+            if promo["used_count"] >= promo["max_uses"]:
+                return {"error": "expired"}
+            cur.execute("SELECT 1 FROM promo_uses WHERE user_id = %s AND code = %s", (user_id, code))
+            if cur.fetchone():
+                return {"error": "already_used"}
+            cur.execute("UPDATE promo_codes SET used_count = used_count + 1 WHERE code = %s", (code,))
+            cur.execute("INSERT INTO promo_uses (user_id, code) VALUES (%s, %s)", (user_id, code))
+        conn.commit()
+    return promo
