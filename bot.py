@@ -13,7 +13,7 @@ from telegram.constants import ParseMode
 import config
 import database as db
 from github_search import random_repo, search_repos, get_repo_by_url, get_top_weekly
-from ai_search import translate_to_github_query, translate_description
+from ai_search import translate_to_github_query, translate_description, generate_title_and_author
 from payments import generate_payment_url
 
 logging.basicConfig(
@@ -37,13 +37,23 @@ WARNING_TEXT = "\n\n<i>⚠️ Бот может ошибаться. Провер
 
 async def send_repo_card(bot, chat_id: int, repo: dict, show_save: bool = True, translate: bool = True):
     description = repo["description"]
+    readme = repo.get("readme", "")
+
     if translate:
+        title, author = generate_title_and_author(repo["name"], description, readme)
         description = translate_description(description)
+    else:
+        parts = repo["name"].split("/")
+        title = parts[-1].replace("-", " ").replace("_", " ").title()
+        author = parts[0] if len(parts) > 1 else repo["name"]
 
     text = (
-        f"🎮 <b>{repo['name']}</b>\n\n"
+        f"<b>{title}</b> | <b>{author}</b>\n\n"
         f"<blockquote>{description[:300]}</blockquote>\n\n"
-        f"⭐ {repo['stars']}  |  🗓 {repo['updated']}  |  📄 {repo['license']}"
+        f"⭐ <b>{repo['stars']}</b>\n"
+        f"📅 <b>{repo['updated']}</b>\n"
+        f"📄 <b>{repo['license']}</b>\n\n"
+        f"🔗 <b>{repo['url']}</b>"
         + WARNING_TEXT
     )
     buttons = []
@@ -245,29 +255,27 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not repos:
             await query.edit_message_text("😔 Не удалось получить топ. Попробуйте позже.")
             return
+        lines = ["🏆 <b>Топ Unity-проектов этой недели:</b>\n"]
+        save_buttons = []
+        for i, repo in enumerate(repos, 1):
+            desc = translate_description(repo["description"])[:120]
+            lines.append(
+                f"{i}. <b>{repo['name'].split('/')[-1].replace('-',' ').replace('_',' ').title()}</b>\n"
+                f"   ⭐ <b>{repo['stars']}</b> | 📅 <b>{repo['updated']}</b>\n"
+                f"   <i>{desc}</i>\n"
+                f"   🔗 {repo['url']}\n"
+            )
+            save_buttons.append([
+                InlineKeyboardButton(f"⭐ {i}. {repo['name'].split('/')[-1][:20]}", callback_data=f"save:{repo['url']}"),
+            ])
+        save_buttons.append([InlineKeyboardButton("◀️ В меню", callback_data="back")])
         await context.bot.send_message(
             chat_id=user_id,
-            text="🏆 <b>Топ Unity-проектов этой недели:</b>",
+            text="\n".join(lines),
             parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+            reply_markup=InlineKeyboardMarkup(save_buttons),
         )
-        for i, repo in enumerate(repos, 1):
-            text = (
-                f"<b>{i}. {repo['name']}</b>\n"
-                f"⭐ {repo['stars']}  |  🗓 {repo['updated']}\n"
-                f"<i>{translate_description(repo['description'])[:150]}</i>\n"
-                f"🔗 {repo['url']}"
-            )
-            await context.bot.send_message(
-                chat_id=user_id, text=text,
-                parse_mode=ParseMode.HTML,
-                disable_web_page_preview=True,
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("⭐ В избранное", callback_data=f"save:{repo['url']}"),
-                    InlineKeyboardButton("🔗 GitHub", url=repo['url']),
-                ]]),
-            )
-            await asyncio.sleep(0.3)
-        await context.bot.send_message(chat_id=user_id, text="Главное меню 👇", reply_markup=main_menu(is_sub))
 
     # ЭКСКЛЮЗИВ
     elif data == "exclusive":

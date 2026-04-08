@@ -63,3 +63,19 @@ def translate_description(text: str) -> str:
         max_tokens=300,
     )
     return result if result else text
+
+
+def generate_title_and_author(repo_name: str, description: str, readme: str) -> tuple:
+    """Возвращает (название игры/проекта, имя автора)"""
+    result = _ask(
+        "Ты анализируешь Unity-репозиторий с GitHub. "
+        "Верни ТОЛЬКО две строки: первая — красивое название игры или проекта (не технический slug, а читаемое имя). "
+        "Вторая — имя автора (из README или username из названия репозитория). "
+        "Без пояснений, без кавычек, строго две строки.",
+        f"Репозиторий: {repo_name}\nОписание: {description}\nREADME (начало):\n{readme[:500]}",
+        max_tokens=60,
+    )
+    lines = [l.strip() for l in result.strip().split("\n") if l.strip()]
+    title = lines[0] if lines else repo_name.split("/")[-1].replace("-", " ").title()
+    author = lines[1] if len(lines) > 1 else repo_name.split("/")[0]
+    return title, author
