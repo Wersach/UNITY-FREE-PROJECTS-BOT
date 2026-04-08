@@ -55,30 +55,34 @@ def translate_description(text: str) -> str:
         return text
     russian_chars = sum(1 for c in text if "а" <= c <= "я" or "А" <= c <= "Я")
     if russian_chars > len(text) * 0.3:
-        return text
+        # Уже на русском — обрезаем до 25 слов
+        words = text.split()
+        return " ".join(words[:25]) + ("..." if len(words) > 25 else "")
     result = _ask(
         "Переведи текст на русский язык. "
-        "Если описание слишком короткое — дополни его 2-3 предложениями на основе названия. "
-        "Итоговый текст должен быть 2-4 предложения. "
-        "Отвечай ТОЛЬКО переводом/текстом, без пояснений и кавычек. "
+        "Итог должен быть 15-25 слов — коротко и по сути. "
+        "Отвечай ТОЛЬКО переводом, без пояснений и кавычек. "
         "Переводи с любого языка включая китайский, японский, корейский.",
         text,
-        max_tokens=300,
+        max_tokens=80,
     )
-    return result if result else text
+    if result:
+        words = result.split()
+        return " ".join(words[:25]) + ("..." if len(words) > 25 else "")
+    return text
 
 
 def generate_title_and_author(repo_name: str, description: str, readme: str) -> tuple:
-    """Возвращает (название игры/проекта, имя автора)"""
     result = _ask(
         "Ты анализируешь Unity-репозиторий с GitHub. "
-        "Верни ТОЛЬКО две строки: первая — красивое название игры или проекта (не технический slug, а читаемое имя). "
-        "Вторая — имя автора (из README или username из названия репозитория). "
+        "Верни ТОЛЬКО две строки: "
+        "1) красивое читаемое название игры/проекта (не технический slug) "
+        "2) имя или никнейм автора (из README или из username репозитория). "
         "Без пояснений, без кавычек, строго две строки.",
-        f"Репозиторий: {repo_name}\nОписание: {description}\nREADME (начало):\n{readme[:500]}",
-        max_tokens=60,
+        f"Репозиторий: {repo_name}\nОписание: {description}\nREADME:\n{readme[:300]}",
+        max_tokens=40,
     )
     lines = [l.strip() for l in result.strip().split("\n") if l.strip()]
-    title = lines[0] if lines else repo_name.split("/")[-1].replace("-", " ").title()
+    title = lines[0] if lines else repo_name.split("/")[-1].replace("-", " ").replace("_", " ").title()
     author = lines[1] if len(lines) > 1 else repo_name.split("/")[0]
     return title, author

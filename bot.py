@@ -48,13 +48,12 @@ async def send_repo_card(bot, chat_id: int, repo: dict, show_save: bool = True, 
         author = parts[0] if len(parts) > 1 else repo["name"]
 
     text = (
-        f"<b>{title}</b> | <b>{author}</b>\n\n"
-        f"<blockquote>{description[:300]}</blockquote>\n\n"
+        f"<b>{title}</b>  |  {author}\n\n"
+        f"<blockquote>{description}</blockquote>\n\n"
         f"⭐ <b>{repo['stars']}</b>\n"
-        f"📅 <b>{repo['updated']}</b>\n"
+        f"📅 <b>{repo.get('created', repo.get('updated', '—'))}</b>\n"
         f"📄 <b>{repo['license']}</b>\n\n"
-        f"🔗 <b>{repo['url']}</b>"
-        + WARNING_TEXT
+        f"🔗 {repo['url']}"
     )
     buttons = []
     if show_save:
@@ -178,6 +177,47 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # CALLBACK
 # ============================================================
 
+MEDAL_EMOJIS = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣"]
+
+
+async def show_top_page(bot, chat_id: int, repos: list, page: int, edit_query=None):
+    total = len(repos)
+    repo = repos[page]
+    medal = MEDAL_EMOJIS[page] if page < len(MEDAL_EMOJIS) else f"{page+1}."
+    name = repo["name"].split("/")[-1].replace("-", " ").replace("_", " ").title()
+    author = repo["name"].split("/")[0]
+    desc = translate_description(repo["description"])
+
+    text = (
+        f"{medal} <b>{name}</b>  |  {author}\n\n"
+        f"<blockquote>{desc}</blockquote>\n\n"
+        f"⭐ <b>{repo['stars']}</b>\n"
+        f"📅 <b>{repo.get('created', repo.get('updated', '—'))}</b>\n"
+        f"📄 <b>{repo['license']}</b>\n\n"
+        f"🔗 {repo['url']}"
+    )
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("◀️", callback_data=f"top_page:{page-1}"))
+    nav.append(InlineKeyboardButton(f"{page+1}/{total}", callback_data="noop"))
+    if page < total - 1:
+        nav.append(InlineKeyboardButton("▶️", callback_data=f"top_page:{page+1}"))
+
+    keyboard = InlineKeyboardMarkup([
+        nav,
+        [InlineKeyboardButton("⭐ В избранное", callback_data=f"save:{repo['url']}"),
+         InlineKeyboardButton("🔗 GitHub", url=repo["url"])],
+        [InlineKeyboardButton("◀️ В меню", callback_data="back")],
+    ])
+
+    if edit_query:
+        await edit_query.edit_message_text(text, parse_mode=ParseMode.HTML,
+                                           reply_markup=keyboard, disable_web_page_preview=True)
+    else:
+        await bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML,
+                               reply_markup=keyboard, disable_web_page_preview=True)
+
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -255,27 +295,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not repos:
             await query.edit_message_text("😔 Не удалось получить топ. Попробуйте позже.")
             return
-        lines = ["🏆 <b>Топ Unity-проектов этой недели:</b>\n"]
-        save_buttons = []
-        for i, repo in enumerate(repos, 1):
-            desc = translate_description(repo["description"])[:120]
-            lines.append(
-                f"{i}. <b>{repo['name'].split('/')[-1].replace('-',' ').replace('_',' ').title()}</b>\n"
-                f"   ⭐ <b>{repo['stars']}</b> | 📅 <b>{repo['updated']}</b>\n"
-                f"   <i>{desc}</i>\n"
-                f"   🔗 {repo['url']}\n"
-            )
-            save_buttons.append([
-                InlineKeyboardButton(f"⭐ {i}. {repo['name'].split('/')[-1][:20]}", callback_data=f"save:{repo['url']}"),
-            ])
-        save_buttons.append([InlineKeyboardButton("◀️ В меню", callback_data="back")])
-        await context.bot.send_message(
-            chat_id=user_id,
-            text="\n".join(lines),
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True,
-            reply_markup=InlineKeyboardMarkup(save_buttons),
-        )
+        # Сохраняем топ в context для пагинации
+        context.user_data["top_repos"] = repos
+        await show_top_page(context.bot, user_id, repos, page=0, edit_query=query)
+        return
 
     # ЭКСКЛЮЗИВ
     elif data == "exclusive":
@@ -423,6 +446,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             await show_favorites_page(query, user_id, favs, page=0)
+
+    elif data.startswith("top_page:"):
+        page = int(data.split(":")[1])
+        repos = context.user_data.get("top_repos", [])
+        if not repos:
+            await query.edit_message_text("😔 Данные устарели, запросите топ снова.")
+            return
+        await show_top_page(context.bot, user_id, repos, page=page, edit_query=query)
 
     elif data == "back":
         await query.edit_message_text("Главное меню 👇", reply_markup=main_menu(is_sub))
@@ -662,4 +693,20 @@ def main():
 
 
 if __name__ == "__main__":
+    import os
+    import threading
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+
+    class HealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+        def log_message(self, *args):
+            pass
+
+    port = int(os.getenv("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    logger.info(f"Health check сервер запущен на порту {port}")
     main()
