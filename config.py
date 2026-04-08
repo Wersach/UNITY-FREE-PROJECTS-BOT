@@ -32,3 +32,6 @@ PLANS = {
 
 # ==================== РЕФЕРАЛЬНАЯ СИСТЕМА ====================
 REFERRAL_BONUS_DAYS = 3  # дней за каждого приглашённого
+
+# ==================== КАНАЛ ====================
+CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "unity_free_projects")

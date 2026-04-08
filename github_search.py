@@ -101,3 +101,29 @@ def search_repos(query: str, stars_min: int = 0, stars_max: int = 10000,
         screenshot = _find_screenshot(readme, owner, repo)
         results.append(_format_repo(item, readme, screenshot))
     return results
+
+
+def get_repo_by_url(url: str) -> dict | None:
+    parts = url.rstrip("/").split("/")
+    if len(parts) < 2:
+        return None
+    owner, repo = parts[-2], parts[-1]
+    data = _get(f"https://api.github.com/repos/{owner}/{repo}")
+    if not data or "id" not in data:
+        return None
+    readme = _get_readme(owner, repo)
+    screenshot = _find_screenshot(readme, owner, repo)
+    return _format_repo(data, readme, screenshot)
+
+
+def get_top_weekly(per_page: int = 10) -> list:
+    from datetime import datetime, timedelta
+    week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+    query = f"topic:unity language:C# created:>{week_ago}"
+    data = _get(
+        "https://api.github.com/search/repositories",
+        params={"q": query, "sort": "stars", "order": "desc", "per_page": per_page},
+    )
+    if not data or not data.get("items"):
+        return []
+    return [_format_repo(item) for item in data["items"]]

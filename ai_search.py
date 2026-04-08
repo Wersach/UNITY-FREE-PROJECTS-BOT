@@ -48,3 +48,18 @@ def is_valid_search_query(query: str) -> bool:
         return False
     result = translate_to_github_query(query)
     return result is not None
+
+
+def translate_description(text: str) -> str:
+    if not text or text == "Описание отсутствует":
+        return text
+    # Проверяем нужен ли перевод (если текст уже на русском)
+    russian_chars = sum(1 for c in text if "а" <= c <= "я" or "А" <= c <= "Я")
+    if russian_chars > len(text) * 0.3:
+        return text
+    result = _ask(
+        "Переведи текст на русский язык. Отвечай только переводом, без пояснений.",
+        text,
+        max_tokens=300,
+    )
+    return result if result else text

@@ -346,3 +346,35 @@ def use_promo(user_id: int, code: str) -> dict | None:
             cur.execute("INSERT INTO promo_uses (user_id, code) VALUES (%s, %s)", (user_id, code))
         conn.commit()
     return promo
+
+
+# ==================== ЭКСКЛЮЗИВНЫЕ РЕПО ====================
+
+def add_exclusive(repo_url: str, repo_name: str, description: str, stars: int, added_by: int):
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO favorites (user_id, repo_url, repo_name, stars)
+                   VALUES (-1, %s, %s, %s) ON CONFLICT DO NOTHING""",
+                (repo_url, repo_name, stars),
+            )
+        conn.commit()
+
+
+def get_exclusives() -> list:
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM favorites WHERE user_id = -1 ORDER BY added_at DESC",
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+
+def remove_exclusive(repo_url: str):
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM favorites WHERE user_id = -1 AND repo_url = %s",
+                (repo_url,),
+            )
+        conn.commit()
