@@ -55,6 +55,7 @@ def _format_repo(item, readme="", screenshot=None) -> dict:
         "stars": item.get("stargazers_count", 0),
         "language": item.get("language") or "C#",
         "created": item.get("created_at", "")[:10],
+        "created": item.get("created_at", "")[:10],
         "updated": item.get("updated_at", "")[:10],
         "license": (item.get("license") or {}).get("spdx_id", "—"),
         "screenshot": screenshot,

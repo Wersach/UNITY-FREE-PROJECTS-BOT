@@ -28,7 +28,7 @@ WAITING_NOTIF = set()
 WAITING_PROMO = set()
 WAITING_URL = set()
 
-WARNING_TEXT = "\n\n<i>⚠️ Бот может ошибаться. Проверяйте репозиторий перед использованием.</i>"
+WARNING_TEXT = ""
 
 
 # ============================================================
@@ -167,7 +167,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"👋 Привет, <b>{user.first_name}</b>!\n\n"
         f"Я помогаю находить Unity-проекты на GitHub.\n\n"
-        f"{'✅ У вас активна подписка' if is_sub else f'🆓 Бесплатный план: {config.FREE_DAILY_LIMIT} случайных репо в день'}",
+        f"{'✅ У вас активна подписка' if is_sub else f'🆓 Бесплатный план: {config.FREE_DAILY_LIMIT} случайных репо в день'}\n\n"
+        f"<i>⚠️ Бот может ошибаться при определении типа проекта. Всегда проверяйте репозиторий перед использованием.</i>",
         parse_mode=ParseMode.HTML,
         reply_markup=main_menu(is_sub),
     )
@@ -216,6 +217,44 @@ async def show_top_page(bot, chat_id: int, repos: list, page: int, edit_query=No
     else:
         await bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML,
                                reply_markup=keyboard, disable_web_page_preview=True)
+
+
+MEDALS = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣"]
+
+
+async def show_top_page(query_or_msg, context, user_id: int, repos: list, page: int):
+    repo = repos[page]
+    total = len(repos)
+    medal = MEDALS[page] if page < len(MEDALS) else f"{page+1}."
+    desc = translate_description(repo["description"])
+
+    text = (
+        f"🏆 <b>Топ недели</b>  {medal} {page+1}/{total}\n\n"
+        f"<b>{repo['name'].split('/')[-1].replace('-',' ').replace('_',' ').title()}</b>\n\n"
+        f"<blockquote>{desc}</blockquote>\n\n"
+        f"⭐ <b>{repo['stars']}</b>\n"
+        f"🔄 Обновлён: <b>{repo['updated']}</b>\n\n"
+        f"🔗 {repo['url']}"
+    )
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("◀️", callback_data=f"top_page:{page-1}"))
+    nav.append(InlineKeyboardButton(f"{page+1}/{total}", callback_data="noop"))
+    if page < total - 1:
+        nav.append(InlineKeyboardButton("▶️", callback_data=f"top_page:{page+1}"))
+
+    keyboard = InlineKeyboardMarkup([
+        nav,
+        [InlineKeyboardButton("⭐ В избранное", callback_data=f"save:{repo['url']}"),
+         InlineKeyboardButton("🔗 GitHub", url=repo['url'])],
+        [InlineKeyboardButton("◀️ В меню", callback_data="back")],
+    ])
+    if hasattr(query_or_msg, 'edit_message_text'):
+        await query_or_msg.edit_message_text(text, parse_mode=ParseMode.HTML,
+            reply_markup=keyboard, disable_web_page_preview=True)
+    else:
+        await query_or_msg.reply_text(text, parse_mode=ParseMode.HTML,
+            reply_markup=keyboard, disable_web_page_preview=True)
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -457,6 +496,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "back":
         await query.edit_message_text("Главное меню 👇", reply_markup=main_menu(is_sub))
+
+    elif data.startswith("top_page:"):
+        page = int(data.split(":")[1])
+        repos = context.user_data.get("top_repos", [])
+        if repos:
+            await show_top_page(query, context, user_id, repos, page)
 
     elif data == "noop":
         pass
