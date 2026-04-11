@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import random
+import threading
+from flask import Flask, request as flask_request
 from datetime import datetime
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -720,9 +722,68 @@ async def cmd_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ТОЧКА ВХОДА
 # ============================================================
 
+flask_app = Flask(__name__)
+_bot_app = None
+
+
+@flask_app.route("/")
+def ping():
+    return "OK", 200
+
+
+@flask_app.route("/robokassa/result", methods=["POST"])
+def robokassa_result():
+    out_sum = flask_request.form.get("OutSum", "")
+    inv_id = flask_request.form.get("InvId", "")
+    signature = flask_request.form.get("SignatureValue", "")
+
+    if not verify_payment(out_sum, inv_id, signature):
+        return "bad signature", 400
+
+    payment = db.get_payment(int(inv_id))
+    if not payment or payment["status"] == "paid":
+        return f"OK{inv_id}", 200
+
+    db.confirm_payment(int(inv_id))
+    plan = config.PLANS.get(payment["plan"])
+    if plan:
+        until = db.add_subscription(payment["user_id"], plan["days"])
+        if _bot_app:
+            asyncio.run_coroutine_threadsafe(
+                _bot_app.bot.send_message(
+                    chat_id=payment["user_id"],
+                    text=f"✅ Оплата прошла успешно!\n"
+                         f"Подписка активна до {until.strftime('%d.%m.%Y')}\n\n"
+                         f"Напишите /start чтобы открыть меню.",
+                ),
+                asyncio.get_event_loop(),
+            )
+    return f"OK{inv_id}", 200
+
+
+@flask_app.route("/robokassa/success")
+def robokassa_success():
+    return "Оплата прошла успешно! Вернитесь в бот.", 200
+
+
+@flask_app.route("/robokassa/fail")
+def robokassa_fail():
+    return "Оплата не прошла. Попробуйте снова.", 200
+
+
+def _start_flask():
+    import logging as _log
+    _log.getLogger("werkzeug").setLevel(_log.ERROR)
+    flask_app.run(host="0.0.0.0", port=10000)
+
+
 def main():
+    global _bot_app
+    thread = threading.Thread(target=_start_flask, daemon=True)
+    thread.start()
     db.init_db()
     app = Application.builder().token(config.BOT_TOKEN).build()
+    _bot_app = app
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("admin", cmd_admin))
@@ -733,6 +794,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
+    _bot_app = app
     logger.info("🤖 Unity Search Bot запущен")
     app.run_polling(drop_pending_updates=True)
 
