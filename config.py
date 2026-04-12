@@ -35,3 +35,6 @@ REFERRAL_BONUS_DAYS = 3  # дней за каждого приглашённог
 
 # ==================== КАНАЛ ====================
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "unity_free_projects")
+
+# ==================== ОФЕРТА ====================
+OFERTA_URL = os.getenv("OFERTA_URL", "")

@@ -398,6 +398,24 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         plan = config.PLANS.get(plan_key)
         if not plan:
             return
+        await query.edit_message_text(
+            f"📄 <b>Перед оплатой</b>\n\n"
+            f"Оплачивая подписку <b>{plan['label']}</b>, вы принимаете условия "
+            f"<a href='{config.OFERTA_URL}'>публичной оферты</a>.\n\n"
+            f"Стоимость: <b>{plan['price']} ₽</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Принять и оплатить", callback_data=f"pay_confirm:{plan_key}")],
+                [InlineKeyboardButton("◀️ Назад", callback_data="subscribe")],
+            ]),
+            disable_web_page_preview=True,
+        )
+
+    elif data.startswith("pay_confirm:"):
+        plan_key = data.split(":")[1]
+        plan = config.PLANS.get(plan_key)
+        if not plan:
+            return
         inv_id = int(str(user_id)[-6:] + str(random.randint(100, 999)))
         db.create_payment(user_id, inv_id, plan_key, plan["price"])
         url = generate_payment_url(inv_id, plan["price"], f"Unity Search {plan['label']}")
