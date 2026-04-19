@@ -31,15 +31,18 @@ def _ask(system: str, user: str, max_tokens: int = 200) -> str:
 
 def translate_to_github_query(user_input: str) -> str | None:
     system = """Ты помогаешь искать Unity-репозитории на GitHub.
-Пользователь описывает что хочет найти на любом языке.
-Твоя задача — перевести это в короткий поисковый запрос для GitHub API (3-6 слов, на английском).
-Если запрос не имеет смысла или не связан с играми/разработкой — ответь только словом: INVALID
-Отвечай ТОЛЬКО запросом или INVALID, без пояснений."""
+Пользователь описывает что хочет найти — на любом языке, любыми словами.
+Твоя задача — придумать несколько вариантов поискового запроса для GitHub API.
 
-    result = _ask(system, user_input, max_tokens=30)
+Правила:
+- Запрос должен быть на английском, 2-5 слов
+- Думай семантически: "рпг" → "RPG game unity", "платформер" → "platformer game unity", "стрелялка" → "shooter game unity"
+- Если запрос совсем не связан с играми или разработкой — ответь только: INVALID
+- Верни ТОЛЬКО один лучший запрос, без пояснений и кавычек"""
+
+    result = _ask(system, user_input, max_tokens=20)
     if not result or result.upper() == "INVALID":
         return None
-    # Убираем кавычки если AI добавил
     return result.strip('"\'')
 
 
@@ -55,34 +58,39 @@ def translate_description(text: str) -> str:
         return text
     russian_chars = sum(1 for c in text if "а" <= c <= "я" or "А" <= c <= "Я")
     if russian_chars > len(text) * 0.3:
-        # Уже на русском — обрезаем до 25 слов
         words = text.split()
-        return " ".join(words[:25]) + ("..." if len(words) > 25 else "")
+        return " ".join(words[:30]) + ("..." if len(words) > 30 else "")
     result = _ask(
-        "Переведи текст на русский язык. "
-        "Итог должен быть 15-25 слов — коротко и по сути. "
-        "Отвечай ТОЛЬКО переводом, без пояснений и кавычек. "
-        "Переводи с любого языка включая китайский, японский, корейский.",
+        "Переведи описание репозитория на русский язык. "
+        "Итог — 1-3 предложения, понятно и по сути. "
+        "Технические термины (Unity, GitHub, API, C#, UI и т.п.) не переводи. "
+        "Переводи с любого языка включая китайский, японский, корейский. "
+        "Отвечай ТОЛЬКО переводом, без пояснений и кавычек.",
         text,
-        max_tokens=80,
+        max_tokens=120,
     )
     if result:
-        words = result.split()
-        return " ".join(words[:25]) + ("..." if len(words) > 25 else "")
+        return result
     return text
 
 
 def generate_title_and_author(repo_name: str, description: str, readme: str) -> tuple:
+    parts = repo_name.split("/")
+    raw_title = parts[-1].replace("-", " ").replace("_", " ").title() if len(parts) > 1 else repo_name
+    raw_author = parts[0] if len(parts) > 1 else repo_name
+
     result = _ask(
         "Ты анализируешь Unity-репозиторий с GitHub. "
-        "Верни ТОЛЬКО две строки: "
-        "1) красивое читаемое название игры/проекта (не технический slug) "
-        "2) имя или никнейм автора (из README или из username репозитория). "
+        "Верни ТОЛЬКО две строки:\n"
+        "1) Красивое читаемое название проекта на русском или английском "
+        "(если название техническое — переведи или улучши, если уже красивое — оставь). "
+        "Не добавляй слово Unity.\n"
+        "2) Имя или никнейм автора (возьми из username репозитория или README).\n"
         "Без пояснений, без кавычек, строго две строки.",
-        f"Репозиторий: {repo_name}\nОписание: {description}\nREADME:\n{readme[:300]}",
-        max_tokens=40,
+        f"Репозиторий: {repo_name}\nОписание: {description}\nREADME:\n{readme[:400]}",
+        max_tokens=50,
     )
     lines = [l.strip() for l in result.strip().split("\n") if l.strip()]
-    title = lines[0] if lines else repo_name.split("/")[-1].replace("-", " ").replace("_", " ").title()
-    author = lines[1] if len(lines) > 1 else repo_name.split("/")[0]
+    title = lines[0] if lines else raw_title
+    author = lines[1] if len(lines) > 1 else raw_author
     return title, author

@@ -49,12 +49,14 @@ async def send_repo_card(bot, chat_id: int, repo: dict, show_save: bool = True, 
         title = parts[-1].replace("-", " ").replace("_", " ").title()
         author = parts[0] if len(parts) > 1 else repo["name"]
 
+    license_text = repo['license'] if repo['license'] and repo['license'] != "—" else "Нет лицензии"
+    date_text = repo.get('created', repo.get('updated', '—'))
+
     text = (
-        f"<b>{title}</b>  |  {author}\n\n"
-        f"<blockquote>{description}</blockquote>\n\n"
-        f"⭐ <b>{repo['stars']}</b>\n"
-        f"📅 <b>{repo.get('created', repo.get('updated', '—'))}</b>\n"
-        f"📄 <b>{repo['license']}</b>\n\n"
+        f"<b>{title}</b>\n"
+        f"<i>by {author}</i>\n\n"
+        f"{description}\n\n"
+        f"⭐ {repo['stars']}  📅 {date_text}  📄 {license_text}\n\n"
         f"🔗 {repo['url']}"
     )
     buttons = []
