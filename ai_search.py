@@ -55,19 +55,20 @@ def is_valid_search_query(query: str) -> bool:
 
 def translate_description(text: str) -> str:
     if not text or text == "Описание отсутствует":
-        return text
+        return "Описание отсутствует"
     russian_chars = sum(1 for c in text if "а" <= c <= "я" or "А" <= c <= "Я")
-    if russian_chars > len(text) * 0.3:
-        words = text.split()
-        return " ".join(words[:30]) + ("..." if len(words) > 30 else "")
+    if russian_chars > len(text) * 0.5:
+        return text
     result = _ask(
-        "Переведи описание репозитория на русский язык. "
-        "Итог — 1-3 предложения, понятно и по сути. "
-        "Технические термины (Unity, GitHub, API, C#, UI и т.п.) не переводи. "
-        "Переводи с любого языка включая китайский, японский, корейский. "
-        "Отвечай ТОЛЬКО переводом, без пояснений и кавычек.",
+        "Переведи описание Unity-репозитория на русский язык. "
+        "Правила: "
+        "1) Переводи ВСЕГДА — даже если текст короткий или кажется понятным. "
+        "2) Если в оригинале 1 предложение — переведи 1. Если больше — дай 2-3 предложения. "
+        "3) Технические термины не переводи: Unity, GitHub, API, C#, UI, SDK, plugin, framework, shader и подобные. "
+        "4) Переводи с любого языка включая китайский, японский, корейский. "
+        "5) Отвечай ТОЛЬКО переводом, без пояснений, без кавычек, без вступлений.",
         text,
-        max_tokens=120,
+        max_tokens=150,
     )
     if result:
         return result
