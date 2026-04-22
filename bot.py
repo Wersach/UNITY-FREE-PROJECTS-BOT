@@ -16,7 +16,7 @@ import config
 import database as db
 from github_search import random_repo, search_repos, get_repo_by_url, get_top_weekly
 from ai_search import translate_to_github_query, translate_description, generate_title_and_author
-from payments import generate_payment_url
+from payments import generate_payment_url, verify_payment
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -629,7 +629,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         await update.message.reply_text(f"🔍 Результаты по запросу <b>{query_str}</b>:", parse_mode=ParseMode.HTML)
-        for repo in results:
+        for repo in results[:3]:
             await send_repo_card(context.bot, user_id, repo, show_save=True, translate=True)
             await asyncio.sleep(0.5)
         await update.message.reply_text("Главное меню 👇", reply_markup=main_menu(True))
@@ -652,7 +652,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         await update.message.reply_text(f"🤖 Нашёл по запросу <b>{github_query}</b>:", parse_mode=ParseMode.HTML)
-        for repo in results:
+        for repo in results[:3]:
             await send_repo_card(context.bot, user_id, repo, show_save=True, translate=True)
             await asyncio.sleep(0.5)
         await update.message.reply_text("Главное меню 👇", reply_markup=main_menu(True))
@@ -744,6 +744,7 @@ async def cmd_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 flask_app = Flask(__name__)
 _bot_app = None
+_loop = None
 
 
 @flask_app.route("/")
@@ -776,7 +777,7 @@ def robokassa_result():
                          f"Подписка активна до {until.strftime('%d.%m.%Y')}\n\n"
                          f"Напишите /start чтобы открыть меню.",
                 ),
-                asyncio.get_event_loop(),
+                _loop,
             )
     return f"OK{inv_id}", 200
 
@@ -798,12 +799,13 @@ def _start_flask():
 
 
 def main():
-    global _bot_app
+    global _bot_app, _loop
     thread = threading.Thread(target=_start_flask, daemon=True)
     thread.start()
     db.init_db()
     app = Application.builder().token(config.BOT_TOKEN).build()
     _bot_app = app
+    _loop = asyncio.get_event_loop()
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("admin", cmd_admin))
@@ -815,6 +817,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     _bot_app = app
+    _loop = asyncio.get_event_loop()
     logger.info("🤖 Unity Search Bot запущен")
     app.run_polling(drop_pending_updates=True)
 
